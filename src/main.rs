@@ -1,5 +1,6 @@
 use std::io;
 use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -45,6 +46,55 @@ fn main() {
     if start_port > end_port {
         std::mem::swap(&mut start_port, &mut end_port);
     }
+
+    let test_vec: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+    let test_vec2 = Arc::clone(&test_vec);
+    let test_vec3 = Arc::clone(&test_vec);
+    let test_vec4 = Arc::clone(&test_vec);
+
+    let x1 = thread::spawn(move || {
+        loop {
+            let number = {
+                let mut guard = test_vec2.lock().unwrap();
+                guard.pop()
+            };
+
+            match number {
+                Some(n) => println!("yo yo it's ya boi x1. {}", n),
+                None => break,
+            }
+        }
+    });
+    let x2 = thread::spawn(move || {
+        loop {
+            let number = {
+                let mut guard = test_vec3.lock().unwrap();
+                guard.pop()
+            };
+
+            match number {
+                Some(n) => println!("x2 here whadup. {}", n),
+                None => break,
+            }
+        }
+    });
+    let x3 = thread::spawn(move || {
+        loop {
+            let number = {
+                let mut guard = test_vec4.lock().unwrap();
+                guard.pop()
+            };
+
+            match number {
+                Some(n) => println!("this is x3, over. {}", n),
+                None => break,
+            }
+        }
+    });
+
+    x1.join().unwrap();
+    x2.join().unwrap();
+    x3.join().unwrap();
 
     let mut res: Vec<JoinHandle<(u16, PortStatus)>> = vec![];
 
