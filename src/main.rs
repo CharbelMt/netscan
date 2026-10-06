@@ -47,73 +47,72 @@ fn main() {
         std::mem::swap(&mut start_port, &mut end_port);
     }
 
-    let test_vec: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
-    let test_vec2 = Arc::clone(&test_vec);
-    let test_vec3 = Arc::clone(&test_vec);
-    let test_vec4 = Arc::clone(&test_vec);
+    // end results for each thread
+    let mut results: Vec<JoinHandle<Vec<(u16, PortStatus)>>> = vec![];
 
-    let x1 = thread::spawn(move || {
-        loop {
-            let number = {
-                let mut guard = test_vec2.lock().unwrap();
-                guard.pop()
-            };
-
-            match number {
-                Some(n) => println!("yo yo it's ya boi x1. {}", n),
-                None => break,
-            }
-        }
-    });
-    let x2 = thread::spawn(move || {
-        loop {
-            let number = {
-                let mut guard = test_vec3.lock().unwrap();
-                guard.pop()
-            };
-
-            match number {
-                Some(n) => println!("x2 here whadup. {}", n),
-                None => break,
-            }
-        }
-    });
-    let x3 = thread::spawn(move || {
-        loop {
-            let number = {
-                let mut guard = test_vec4.lock().unwrap();
-                guard.pop()
-            };
-
-            match number {
-                Some(n) => println!("this is x3, over. {}", n),
-                None => break,
-            }
-        }
-    });
-
-    x1.join().unwrap();
-    x2.join().unwrap();
-    x3.join().unwrap();
-
-    let mut res: Vec<JoinHandle<(u16, PortStatus)>> = vec![];
+    // ports to be scanned; 1 -> 10k
+    let mut ports: Vec<u16> = vec![];
 
     for port in start_port..=end_port {
-        res.push(thread::spawn(move || (port, scan_port(ip, port))));
+        ports.push(port);
     }
 
-    for i in res {
-        match i.join().unwrap() {
-            (port, PortStatus::Open) => {
+    // create the shared Arc queue
+    let work_queue = Arc::new(Mutex::new(ports));
+
+    // create 100 workers
+    for _ in 1..=100 {
+        let clone = Arc::clone(&work_queue);
+
+        // push join handles into results
+        results.push(thread::spawn(move || {
+            let mut local_results = vec![];
+
+            // thread loop
+            loop {
+                // mutex guard lock and unlock after extracting port
+                let port = {
+                    let mut guard = clone.lock().unwrap();
+                    guard.pop()
+                };
+
+                // match on Option<u16> for port
+                match port {
+                    Some(n) => {
+                        let res = scan_port(ip, n);
+                        local_results.push((n, res)); // return expect result type of port + port status
+                    }
+                    None => break, // break from the thread
+                }
+            }
+
+            local_results
+        }));
+    }
+
+    let mut result_list = vec![];
+
+    // join joinhandles and retrieve the local result vector from each thread
+    for i in results {
+        result_list.extend(i.join().unwrap()); // store results in a master result list by extending instead of pushing
+    }
+
+    result_list.sort_by_key(|res| res.0); // sort the list based on port number
+
+    // status report for each port
+    // destructure it to match only on status
+    for (port, status) in result_list {
+        match status {
+            PortStatus::Open => {
                 println!("{ip}:{port} is OPEN");
             }
-            (port, PortStatus::Closed) => {
+            PortStatus::Closed => {
                 println!("{ip}:{port} is CLOSED");
             }
-            (port, PortStatus::TimedOut) => {
+            PortStatus::TimedOut => {
                 println!("{ip}:{port} TIMEDOUT");
             }
-            (port, PortStatus::Error(e)) => {
+            PortStatus::Error(e) => {
                 println!("{ip}:{port} error: {e}");
             }
         }
