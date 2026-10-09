@@ -22,6 +22,9 @@ impl Config {
         if worker_count == 0 {
             return Err("Worker count cannot be 0");
         }
+        if worker_count > 100 {
+            return Err("Worker count cannot exceed 100.");
+        }
         if timeout == Duration::ZERO {
             return Err("Timeout time cannot be 0");
         }
@@ -52,53 +55,7 @@ fn scan_port(ip: IpAddr, port: u16, timeout_time: Duration) -> PortStatus {
     }
 }
 
-fn main() {
-    // get user input
-    let mut buffer = String::new();
-    let mut buffer2 = String::new();
-
-    println!("enter ip, start port and end port separated by space: ");
-    io::stdin().read_line(&mut buffer).unwrap();
-
-    println!("enter number of threads and timeout duration, separated by space: ");
-    io::stdin().read_line(&mut buffer2).unwrap();
-
-    let scan_range: Vec<&str> = buffer.split_whitespace().collect();
-    let scanner_config: Vec<&str> = buffer2.split_whitespace().collect();
-
-    let [a, b, c] = &scan_range[..] else {
-        panic!("bad input")
-    };
-    let [num_workers, timeout_dur] = &scanner_config[..] else {
-        panic!("bad input")
-    };
-
-    let ip: IpAddr = a.parse().unwrap();
-    let mut start_port: u16 = b.parse().unwrap();
-    let mut end_port: u16 = c.parse().unwrap();
-
-    // ensure start port is less than end port
-    if start_port > end_port {
-        std::mem::swap(&mut start_port, &mut end_port);
-    }
-
-    // ports to be scanned; 1 -> 10k
-    let mut ports: Vec<u16> = vec![];
-
-    for port in start_port..=end_port {
-        ports.push(port);
-    }
-
-    let scan_config = match Config::new(
-        num_workers.parse().unwrap(),
-        Duration::from_secs(timeout_dur.parse().unwrap()),
-    ) {
-        Ok(x) => x,
-        Err(e) => {
-            panic!("Config error: {}", e);
-        }
-    };
-
+fn scan_ports(ip: IpAddr, ports: Vec<u16>, scan_config: &Config) -> Vec<ScanResult> {
     let worker_count = scan_config.worker_count;
     let timeout_time = scan_config.timeout;
 
@@ -144,16 +101,20 @@ fn main() {
     let mut result_list = vec![];
 
     // join joinhandles and retrieve the local result vector from each thread
-    for i in results {
-        result_list.extend(i.join().unwrap()); // store results in a master result list by extending instead of pushing
+    for handle in results {
+        result_list.extend(handle.join().unwrap()); // store results in a master result list by extending instead of pushing
     }
 
     result_list.sort_by_key(|res| res.port_number); // sort the list based on port number
 
+    result_list
+}
+
+fn print_results(ip: IpAddr, results: &[ScanResult]) {
     // status report for each port
     // destructure it to match only on status
-    for result in result_list {
-        match result.port_status {
+    for result in results {
+        match &result.port_status {
             PortStatus::Open => {
                 println!("{ip}:{} is OPEN", result.port_number);
             }
@@ -168,4 +129,62 @@ fn main() {
             }
         }
     }
+}
+
+fn main() {
+    // get user input
+    let mut buffer = String::new();
+    let mut buffer2 = String::new();
+
+    println!("enter ip, start port and end port separated by space: ");
+    io::stdin().read_line(&mut buffer).unwrap();
+
+    println!("enter number of threads and timeout duration, separated by space: ");
+    io::stdin().read_line(&mut buffer2).unwrap();
+
+    let scan_range: Vec<&str> = buffer.split_whitespace().collect();
+    let scanner_config: Vec<&str> = buffer2.split_whitespace().collect();
+
+    let [a, b, c] = &scan_range[..] else {
+        panic!("bad input")
+    };
+    let [num_workers, timeout_dur] = &scanner_config[..] else {
+        panic!("bad input")
+    };
+
+    let ip: IpAddr = a.parse().unwrap();
+    let mut start_port: u16 = b.parse().unwrap();
+    let mut end_port: u16 = c.parse().unwrap();
+
+    // ensure start port is less than end port
+    if start_port > end_port {
+        std::mem::swap(&mut start_port, &mut end_port);
+    }
+
+    // ports to be scanned; 1 -> 10k
+    let mut ports: Vec<u16> = vec![];
+
+    for port in start_port..=end_port {
+        ports.push(port);
+    }
+
+    let number_of_threads = num_workers.parse().unwrap();
+
+    if number_of_threads > ports.len() {
+        panic!("You cannot spawn more threads than there are ports.");
+    }
+
+    let scan_config = match Config::new(
+        number_of_threads,
+        Duration::from_secs(timeout_dur.parse().unwrap()),
+    ) {
+        Ok(x) => x,
+        Err(e) => {
+            panic!("Config error: {}", e);
+        }
+    };
+
+    let result_list = scan_ports(ip, ports, &scan_config);
+
+    print_results(ip, &result_list);
 }
