@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Read};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -39,19 +39,61 @@ impl Config {
 struct ScanResult {
     port_number: u16,
     port_status: PortStatus,
+    banner: Option<String>,
 }
 
-fn scan_port(ip: IpAddr, port: u16, timeout_time: Duration) -> PortStatus {
-    let address = SocketAddr::new(ip, port);
+fn scan_port(ip: IpAddr, port: u16, timeout_time: Duration) -> ScanResult {
+    let address = SocketAddr::new(ip, port); // create socket address from ip + port
 
+    // match on successful connection
     match TcpStream::connect_timeout(&address, timeout_time) {
-        Ok(_) => PortStatus::Open,
+        // if successful connection
+        Ok(mut stream) => {
+            let mut buffer = [0u8; 1024]; // memory buffer to store bytes with data
 
-        Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => PortStatus::Closed,
+            stream
+                .set_read_timeout(Some(timeout_time))
+                .expect("read timeout error"); // set read timeout with the same given timeout for the connection
 
-        Err(e) if e.kind() == io::ErrorKind::TimedOut => PortStatus::TimedOut,
+            // try to extract banner bytes and data
+            let banner = match stream.read(&mut buffer) {
+                // if 0 bytes of banner data, return None
+                Ok(0) => None,
 
-        Err(e) => PortStatus::Error(e),
+                // if n bytes, construct a string from the buffer
+                Ok(n) => {
+                    let text = String::from_utf8_lossy(&buffer[..n]).into_owned(); // convert from a slice of bytes to a String
+
+                    Some(text)
+                }
+
+                Err(_) => None, //
+            };
+
+            ScanResult {
+                port_number: port,
+                port_status: PortStatus::Open,
+                banner,
+            }
+        }
+
+        Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => ScanResult {
+            port_number: port,
+            port_status: PortStatus::Closed,
+            banner: None,
+        },
+
+        Err(e) if e.kind() == io::ErrorKind::TimedOut => ScanResult {
+            port_number: port,
+            port_status: PortStatus::TimedOut,
+            banner: None,
+        },
+
+        Err(e) => ScanResult {
+            port_number: port,
+            port_status: PortStatus::Error(e),
+            banner: None,
+        },
     }
 }
 
@@ -84,11 +126,7 @@ fn scan_ports(ip: IpAddr, ports: Vec<u16>, scan_config: &Config) -> Vec<ScanResu
                 // match on Option<u16> for port
                 match port {
                     Some(n) => {
-                        let res = scan_port(ip, n, timeout_time);
-                        local_results.push(ScanResult {
-                            port_number: n,
-                            port_status: res,
-                        }); // return expect result type of port + port status
+                        local_results.push(scan_port(ip, n, timeout_time)); // return expect result type of port + port status
                     }
                     None => break, // break from the thread
                 }
@@ -117,6 +155,10 @@ fn print_results(ip: IpAddr, results: &[ScanResult]) {
         match &result.port_status {
             PortStatus::Open => {
                 println!("{ip}:{} is OPEN", result.port_number);
+
+                if let Some(banner) = &result.banner {
+                    println!("  Banner: {}", banner.trim());
+                }
             }
             PortStatus::Closed => {
                 println!("{ip}:{} is CLOSED", result.port_number);
