@@ -11,11 +11,37 @@ enum PortStatus {
     Error(io::Error),
 }
 
-fn scan_port(ip: IpAddr, port: u16) -> PortStatus {
-    let address = SocketAddr::new(ip, port);
-    let timeout = Duration::from_secs(3);
+struct Config {
+    worker_count: usize,
+    timeout: Duration,
+}
 
-    match TcpStream::connect_timeout(&address, timeout) {
+impl Config {
+    fn new(worker_count: usize, timeout: Duration) -> Result<Self, &'static str> {
+        // safety checks for worker count and timeout
+        if worker_count == 0 {
+            return Err("Worker count cannot be 0");
+        }
+        if timeout == Duration::ZERO {
+            return Err("Timeout time cannot be 0");
+        }
+
+        Ok(Self {
+            worker_count,
+            timeout,
+        })
+    }
+}
+
+struct ScanResult {
+    port_number: u16,
+    port_status: PortStatus,
+}
+
+fn scan_port(ip: IpAddr, port: u16, timeout_time: Duration) -> PortStatus {
+    let address = SocketAddr::new(ip, port);
+
+    match TcpStream::connect_timeout(&address, timeout_time) {
         Ok(_) => PortStatus::Open,
 
         Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => PortStatus::Closed,
@@ -27,15 +53,23 @@ fn scan_port(ip: IpAddr, port: u16) -> PortStatus {
 }
 
 fn main() {
+    // get user input
     let mut buffer = String::new();
+    let mut buffer2 = String::new();
 
     println!("enter ip, start port and end port separated by space: ");
-
     io::stdin().read_line(&mut buffer).unwrap();
 
-    let things: Vec<&str> = buffer.split_whitespace().collect();
+    println!("enter number of threads and timeout duration, separated by space: ");
+    io::stdin().read_line(&mut buffer2).unwrap();
 
-    let [a, b, c] = &things[..] else {
+    let scan_range: Vec<&str> = buffer.split_whitespace().collect();
+    let scanner_config: Vec<&str> = buffer2.split_whitespace().collect();
+
+    let [a, b, c] = &scan_range[..] else {
+        panic!("bad input")
+    };
+    let [num_workers, timeout_dur] = &scanner_config[..] else {
         panic!("bad input")
     };
 
@@ -43,12 +77,10 @@ fn main() {
     let mut start_port: u16 = b.parse().unwrap();
     let mut end_port: u16 = c.parse().unwrap();
 
+    // ensure start port is less than end port
     if start_port > end_port {
         std::mem::swap(&mut start_port, &mut end_port);
     }
-
-    // end results for each thread
-    let mut results: Vec<JoinHandle<Vec<(u16, PortStatus)>>> = vec![];
 
     // ports to be scanned; 1 -> 10k
     let mut ports: Vec<u16> = vec![];
@@ -57,11 +89,27 @@ fn main() {
         ports.push(port);
     }
 
+    let scan_config = match Config::new(
+        num_workers.parse().unwrap(),
+        Duration::from_secs(timeout_dur.parse().unwrap()),
+    ) {
+        Ok(x) => x,
+        Err(e) => {
+            panic!("Config error: {}", e);
+        }
+    };
+
+    let worker_count = scan_config.worker_count;
+    let timeout_time = scan_config.timeout;
+
     // create the shared Arc queue
     let work_queue = Arc::new(Mutex::new(ports));
 
-    // create 100 workers
-    for _ in 1..=100 {
+    // end results for each thread
+    let mut results: Vec<JoinHandle<Vec<ScanResult>>> = vec![];
+
+    // create workers
+    for _ in 1..=worker_count {
         let clone = Arc::clone(&work_queue);
 
         // push join handles into results
@@ -79,8 +127,11 @@ fn main() {
                 // match on Option<u16> for port
                 match port {
                     Some(n) => {
-                        let res = scan_port(ip, n);
-                        local_results.push((n, res)); // return expect result type of port + port status
+                        let res = scan_port(ip, n, timeout_time);
+                        local_results.push(ScanResult {
+                            port_number: n,
+                            port_status: res,
+                        }); // return expect result type of port + port status
                     }
                     None => break, // break from the thread
                 }
@@ -97,23 +148,23 @@ fn main() {
         result_list.extend(i.join().unwrap()); // store results in a master result list by extending instead of pushing
     }
 
-    result_list.sort_by_key(|res| res.0); // sort the list based on port number
+    result_list.sort_by_key(|res| res.port_number); // sort the list based on port number
 
     // status report for each port
     // destructure it to match only on status
-    for (port, status) in result_list {
-        match status {
+    for result in result_list {
+        match result.port_status {
             PortStatus::Open => {
-                println!("{ip}:{port} is OPEN");
+                println!("{ip}:{} is OPEN", result.port_number);
             }
             PortStatus::Closed => {
-                println!("{ip}:{port} is CLOSED");
+                println!("{ip}:{} is CLOSED", result.port_number);
             }
             PortStatus::TimedOut => {
-                println!("{ip}:{port} TIMEDOUT");
+                println!("{ip}:{} TIMEDOUT", result.port_number);
             }
             PortStatus::Error(e) => {
-                println!("{ip}:{port} error: {e}");
+                println!("{ip}:{} error: {e}", result.port_number);
             }
         }
     }
