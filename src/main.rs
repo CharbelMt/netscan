@@ -4,43 +4,36 @@ use std::time::Duration;
 
 use netscan::report::report;
 use netscan::scanner::{Config, scan_ports};
+use netscan::target::parse_ports;
 
 fn main() {
     // get user input
     let mut buffer = String::new();
     let mut buffer2 = String::new();
 
-    println!("enter ip, start port and end port separated by space: ");
+    println!("enter ip and port specification separated by space (e.g. 127.0.0.1 1,2,3,4-10): ");
     io::stdin().read_line(&mut buffer).unwrap();
+
+    let scan_range: Vec<&str> = buffer.split_whitespace().collect();
+    let [inputted_ip, port_specifications] = &scan_range[..] else {
+        panic!("bad input")
+    };
 
     println!("enter number of threads and timeout duration, separated by space: ");
     io::stdin().read_line(&mut buffer2).unwrap();
 
-    let scan_range: Vec<&str> = buffer.split_whitespace().collect();
     let scanner_config: Vec<&str> = buffer2.split_whitespace().collect();
-
-    let [a, b, c] = &scan_range[..] else {
-        panic!("bad input")
-    };
     let [num_workers, timeout_dur] = &scanner_config[..] else {
         panic!("bad input")
     };
 
-    let ip: IpAddr = a.parse().unwrap();
-    let mut start_port: u16 = b.parse().unwrap();
-    let mut end_port: u16 = c.parse().unwrap();
+    let ip: IpAddr = inputted_ip.parse().unwrap();
 
-    // ensure start port is less than end port
-    if start_port > end_port {
-        std::mem::swap(&mut start_port, &mut end_port);
-    }
-
-    // ports to be scanned; 1 -> 10k
-    let mut ports: Vec<u16> = vec![];
-
-    for port in start_port..=end_port {
-        ports.push(port);
-    }
+    // ports to be scanned
+    let ports: Vec<u16> = match parse_ports(port_specifications) {
+        Ok(x) => x,
+        Err(e) => panic!("{}", e),
+    };
 
     let number_of_threads = num_workers.parse().unwrap();
 
