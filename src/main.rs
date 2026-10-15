@@ -15,6 +15,8 @@ struct Args {
     threads: usize,
     #[arg(long)]
     timeout: u64,
+    #[arg(long)]
+    all: bool,
 }
 
 fn main() {
@@ -40,5 +42,5 @@ fn main() {
 
     let result_list = scan_ports(args.ip, ports, &scan_config);
 
-    report(args.ip, &result_list);
+    report(args.ip, &result_list, args.all);
 }
