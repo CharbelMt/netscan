@@ -24,6 +24,10 @@ struct Args {
     #[arg(short = 't', long, default_value_t = 1000)]
     timeout: u64,
 
+    /// Banner read timeout per port, in milliseconds.
+    #[arg(short = 'b', long, default_value_t = 500)]
+    banner_timeout: u64,
+
     /// Include closed, timed-out, and errored ports in the output.
     #[arg(long)]
     all: bool,
@@ -40,7 +44,11 @@ fn main() {
         Err(e) => panic!("{}", e),
     };
 
-    let scan_config = match Config::new(args.workers, Duration::from_millis(args.timeout)) {
+    let scan_config = match Config::new(
+        args.workers,
+        Duration::from_millis(args.timeout),
+        Duration::from_millis(args.banner_timeout),
+    ) {
         Ok(x) => x,
         Err(e) => {
             panic!("Config error: {}", e);

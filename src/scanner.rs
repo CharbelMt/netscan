@@ -1,5 +1,5 @@
-use std::io::Error;
-use std::net::IpAddr;
+use std::io::{self, Error};
+use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -22,10 +22,15 @@ pub enum PortStatus {
 pub struct Config {
     worker_count: usize,
     timeout: Duration,
+    banner_timeout: Duration,
 }
 
 impl Config {
-    pub fn new(worker_count: usize, timeout: Duration) -> Result<Self, &'static str> {
+    pub fn new(
+        worker_count: usize,
+        timeout: Duration,
+        banner_timeout: Duration,
+    ) -> Result<Self, &'static str> {
         // safety checks for worker count and timeout
         if worker_count == 0 {
             return Err("Worker count cannot be 0");
@@ -34,12 +39,16 @@ impl Config {
             return Err("Worker count cannot exceed 100.");
         }
         if timeout == Duration::ZERO {
-            return Err("Timeout time cannot be 0");
+            return Err("Connection timeout time cannot be 0");
+        }
+        if banner_timeout == Duration::ZERO {
+            return Err("Banner timeout time cannot be 0");
         }
 
         Ok(Self {
             worker_count,
             timeout,
+            banner_timeout,
         })
     }
 }
@@ -47,6 +56,7 @@ impl Config {
 pub fn scan_ports(ip: IpAddr, ports: Vec<u16>, scan_config: &Config) -> Vec<ScanResult> {
     let worker_count = scan_config.worker_count.min(ports.len());
     let timeout_time = scan_config.timeout;
+    let banner_timeout = scan_config.banner_timeout;
 
     // create the shared Arc queue
     let work_queue = Arc::new(Mutex::new(ports));
@@ -73,7 +83,7 @@ pub fn scan_ports(ip: IpAddr, ports: Vec<u16>, scan_config: &Config) -> Vec<Scan
                 // match on Option<u16> for port
                 match port {
                     Some(n) => {
-                        local_results.push(grab_banner(ip, n, timeout_time)); // return expect result type of port + port status
+                        local_results.push(scan_port(ip, n, timeout_time, banner_timeout)); // return expect result type of port + port status
                     }
                     None => break, // break from the thread
                 }
@@ -93,4 +103,45 @@ pub fn scan_ports(ip: IpAddr, ports: Vec<u16>, scan_config: &Config) -> Vec<Scan
     result_list.sort_by_key(|res| res.port_number); // sort the list based on port number
 
     result_list
+}
+
+fn scan_port(
+    ip: IpAddr,
+    port: u16,
+    connection_timeout: Duration,
+    banner_timeout: Duration,
+) -> ScanResult {
+    let address = SocketAddr::new(ip, port); // create socket address from ip + port
+
+    // match on successful connection
+    match TcpStream::connect_timeout(&address, connection_timeout) {
+        // if successful connection
+        Ok(mut stream) => {
+            let banner = grab_banner(&mut stream, banner_timeout);
+
+            ScanResult {
+                port_number: port,
+                port_status: PortStatus::Open,
+                banner,
+            }
+        }
+
+        Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => ScanResult {
+            port_number: port,
+            port_status: PortStatus::Closed,
+            banner: None,
+        },
+
+        Err(e) if e.kind() == io::ErrorKind::TimedOut => ScanResult {
+            port_number: port,
+            port_status: PortStatus::TimedOut,
+            banner: None,
+        },
+
+        Err(e) => ScanResult {
+            port_number: port,
+            port_status: PortStatus::Error(e),
+            banner: None,
+        },
+    }
 }

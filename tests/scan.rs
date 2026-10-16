@@ -14,7 +14,7 @@ fn test_tcp_listener() {
     let res = scan_ports(
         address.ip(),
         vec![port],
-        &Config::new(1, Duration::from_secs(1)).unwrap(),
+        &Config::new(1, Duration::from_millis(1000), Duration::from_millis(500)).unwrap(),
     );
 
     assert_eq!(res.len(), 1);
@@ -25,7 +25,7 @@ fn test_tcp_listener() {
     let res2 = scan_ports(
         address.ip(),
         vec![port],
-        &Config::new(1, Duration::from_secs(1)).unwrap(),
+        &Config::new(1, Duration::from_millis(1000), Duration::from_millis(500)).unwrap(),
     );
 
     assert_eq!(res2.len(), 1);
