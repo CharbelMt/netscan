@@ -17,7 +17,7 @@ pub fn grab_banner(stream: &mut TcpStream, timeout: Duration) -> Option<String> 
                 Ok(n) => {
                     let text = String::from_utf8_lossy(&buffer[..n]).into_owned(); // convert from a slice of bytes to a String
 
-                    Some(text)
+                    Some(sanitize_banner(&text))
                 }
 
                 // read error, return None
@@ -27,5 +27,39 @@ pub fn grab_banner(stream: &mut TcpStream, timeout: Duration) -> Option<String> 
 
         // timeout configuration failure
         Err(_) => None,
+    }
+}
+
+fn sanitize_banner(banner_text: &str) -> String {
+    let mut sanitized_banner = String::new();
+
+    for char in banner_text.chars() {
+        if char.is_control() {
+            sanitized_banner.extend(char.escape_default());
+        } else {
+            sanitized_banner.push(char);
+        }
+    }
+
+    sanitized_banner
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn printable_text() {
+        assert_eq!(sanitize_banner("héllo world!"), "héllo world!");
+    }
+
+    #[test]
+    fn whitespace_controls() {
+        assert_eq!(sanitize_banner("hello\r\nworld\t!"), "hello\\r\\nworld\\t!")
+    }
+
+    #[test]
+    fn ansi_escape_sequence() {
+        assert_eq!(sanitize_banner("\u{1b}[31mHELLO"), "\\u{1b}[31mHELLO");
     }
 }
