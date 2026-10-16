@@ -45,7 +45,7 @@ impl Config {
 }
 
 pub fn scan_ports(ip: IpAddr, ports: Vec<u16>, scan_config: &Config) -> Vec<ScanResult> {
-    let worker_count = scan_config.worker_count;
+    let worker_count = scan_config.worker_count.min(ports.len());
     let timeout_time = scan_config.timeout;
 
     // create the shared Arc queue
