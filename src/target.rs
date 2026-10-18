@@ -1,4 +1,18 @@
-pub fn parse_ports(input: &str) -> Result<Vec<u16>, String> {
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum PortParseError {
+    #[error("Invalid port: {0}")]
+    InvalidPort(String),
+
+    #[error("Port cannot be 0")]
+    PortIsZero,
+
+    #[error("Port range is in reverse.")]
+    ReversedRange,
+}
+
+pub fn parse_ports(input: &str) -> Result<Vec<u16>, PortParseError> {
     let ports = input.split(','); // split input on commas
 
     let mut parsed_ports = vec![]; // vector to store valid ports
@@ -27,9 +41,7 @@ pub fn parse_ports(input: &str) -> Result<Vec<u16>, String> {
 
                 // ensure reversed ranges are not accepted
                 if s > e {
-                    return Err(String::from(
-                        "Start port cannot be greater than end port in a range.",
-                    ));
+                    return Err(PortParseError::ReversedRange);
                 }
 
                 // push the ports into the parsed ports vector
@@ -56,22 +68,22 @@ pub fn parse_ports(input: &str) -> Result<Vec<u16>, String> {
     Ok(parsed_ports)
 }
 
-fn parse_port(s: &str) -> Result<u16, String> {
+fn parse_port(s: &str) -> Result<u16, PortParseError> {
     // try to parse a string to u16
     let number = match s.trim().parse::<u16>() {
         // if valid
         Ok(x) => {
             // ensure not 0
             if x == 0 {
-                return Err(String::from("Port cannot be zero"));
+                return Err(PortParseError::PortIsZero);
             }
 
             x
         }
 
         // if invalid, exit the function
-        Err(e) => {
-            return Err(e.to_string());
+        Err(_) => {
+            return Err(PortParseError::InvalidPort(s.trim().to_string()));
         }
     };
 
@@ -86,36 +98,36 @@ mod tests {
 
     #[test]
     fn single_port() {
-        assert_eq!(parse_ports("80"), Ok(vec![80]));
+        assert_eq!(parse_ports("80").unwrap(), vec![80]);
     }
 
     #[test]
     fn range_is_inclusive() {
-        assert_eq!(parse_ports("20-23"), Ok(vec![20, 21, 22, 23]));
+        assert_eq!(parse_ports("20-23").unwrap(), vec![20, 21, 22, 23]);
     }
 
     #[test]
     fn output_is_sorted_and_deduplicated() {
-        assert_eq!(parse_ports("443,22"), Ok(vec![22, 443])); //sorted
-        assert_eq!(parse_ports("80,80,79-81"), Ok(vec![79, 80, 81])); // de-duplicated
+        assert_eq!(parse_ports("443,22").unwrap(), vec![22, 443]);
+        assert_eq!(parse_ports("80,80,79-81").unwrap(), vec![79, 80, 81]);
     }
 
     #[test]
     fn multiple_single_ports() {
-        assert_eq!(parse_ports("22,80,443"), Ok(vec![22, 80, 443]));
+        assert_eq!(parse_ports("22,80,443").unwrap(), vec![22, 80, 443]);
     }
 
     #[test]
     fn single_ports_with_range() {
         assert_eq!(
-            parse_ports("22,80,100-102"),
-            Ok(vec![22, 80, 100, 101, 102])
+            parse_ports("22,80,100-102").unwrap(),
+            vec![22, 80, 100, 101, 102]
         );
     }
 
     #[test]
     fn trim_edges() {
-        assert_eq!(parse_ports(" 22 , 80 "), Ok(vec![22, 80]));
+        assert_eq!(parse_ports(" 22 , 80 ").unwrap(), vec![22, 80]);
     }
 
     #[test]
@@ -135,7 +147,7 @@ mod tests {
             "abc",
             "22,,80",
             "0",
-            "65536", // greater than u16 maximum. fails via parse automatically
+            "65536",
             "100-50",
             "80-",
             "-80",
@@ -143,6 +155,7 @@ mod tests {
             "0-100",
             "65535-65536",
         ];
+
         for input in bad {
             assert!(
                 parse_ports(input).is_err(),

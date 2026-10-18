@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use thiserror::Error;
+
 use crate::banner::grab_banner;
 
 pub struct ScanResult {
@@ -25,24 +27,39 @@ pub struct Config {
     banner_timeout: Duration,
 }
 
+#[derive(Error, Debug)]
+pub enum ConfigError {
+    #[error("Cannot spawn 0 workers")]
+    ZeroWorkers,
+
+    #[error("Cannot spawn more than 100 workers")]
+    TooManyWorkers,
+
+    #[error("Connection timeout cannot be 0")]
+    ZeroConnectionTimeout,
+
+    #[error("Banner read timeout cannot be 0")]
+    ZeroBannerTimeout,
+}
+
 impl Config {
     pub fn new(
         worker_count: usize,
         timeout: Duration,
         banner_timeout: Duration,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ConfigError> {
         // safety checks for worker count and timeout
         if worker_count == 0 {
-            return Err("Worker count cannot be 0");
+            return Err(ConfigError::ZeroWorkers);
         }
         if worker_count > 100 {
-            return Err("Worker count cannot exceed 100.");
+            return Err(ConfigError::TooManyWorkers);
         }
         if timeout == Duration::ZERO {
-            return Err("Connection timeout time cannot be 0");
+            return Err(ConfigError::ZeroConnectionTimeout);
         }
         if banner_timeout == Duration::ZERO {
-            return Err("Banner timeout time cannot be 0");
+            return Err(ConfigError::ZeroBannerTimeout);
         }
 
         Ok(Self {

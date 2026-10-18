@@ -33,29 +33,22 @@ struct Args {
     all: bool,
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     // get input from program run (ex. cargo run -- 127.0.0.1 --ports 22,80,100-105 --workers 4 --timeout 1000)
     // (short form: cargo run -- 127.0.0.1 -p 22,80,100-105 -w 4 -t 1000)
     let args = Args::parse();
 
     // ports to be scanned
-    let ports: Vec<u16> = match parse_ports(&args.ports) {
-        Ok(x) => x,
-        Err(e) => panic!("{}", e),
-    };
+    let ports: Vec<u16> = parse_ports(&args.ports)?;
 
-    let scan_config = match Config::new(
+    let scan_config = Config::new(
         args.workers,
         Duration::from_millis(args.timeout),
         Duration::from_millis(args.banner_timeout),
-    ) {
-        Ok(x) => x,
-        Err(e) => {
-            panic!("Config error: {}", e);
-        }
-    };
+    )?;
 
     let result_list = scan_ports(args.ip, ports, &scan_config);
 
     report(args.ip, &result_list, args.all);
+    Ok(())
 }
