@@ -1,178 +1,203 @@
 # netscan
 
-A multithreaded TCP connect port scanner and passive banner grabber written in Rust.
+[![CI](https://github.com/<you>/netscan/actions/workflows/ci.yml/badge.svg)](https://github.com/<you>/netscan/actions/workflows/ci.yml)
 
-`netscan` scans an IPv4 address, IPv6 address, or hostname for TCP ports, optionally reads banners from successful connections, and reports results as human-readable text or JSON. It uses a bounded pool of OS threads and a shared work queue; it does **not** use Tokio or raw sockets.
+A multithreaded TCP connect port scanner and passive banner grabber, written in Rust.
 
-> **Authorized use only:** Scan hosts you own or have explicit permission to test. For local testing, use `127.0.0.1` or a test VM.
+`netscan` takes an IPv4 address, IPv6 address, or hostname, tries to open TCP connections to a set of ports, classifies each result (open, closed, timed out, or error), reads a service banner from open ports when the service sends one, and reports the results as terminal text or JSON. It was built as a learning project to practice systems-level Rust and to make the mechanics of a connect scan explicit: concurrency, timeouts, error handling, and treating network data as untrusted input.
+
+> **Authorized use only.** Scan hosts and networks you own or have explicit permission to test. Good targets are `127.0.0.1`, your own lab machines, or a VM you control. Unauthorized scanning may violate policy or law in your jurisdiction.
 
 ## Features
 
-- TCP connect scanning with configurable connection timeout
-- IPv4, IPv6, and hostname input (resolved once before scanning)
-- Individual ports, inclusive ranges, and comma-separated port specifications
-- Bounded worker pool (1–100 OS threads)
-- Passive banner grabbing with a separate read timeout and a 1,024-byte read limit
-- Lossy UTF-8 decoding and escaping of terminal control characters in banners
-- Open, closed, timed-out, and error status classification
-- Sorted scan results and deduplicated port specifications
-- Human-readable output by default; pretty-printed JSON via `--json`
-- Optional inclusion of non-open ports via `--all`
-- Structured validation errors using `thiserror` and application-level error propagation using `anyhow`
-
-## Requirements
-
-- Rust and Cargo with support for Rust edition 2024
+- TCP connect scanning with a configurable connection timeout
+- IPv4, IPv6, and hostname targets (a hostname is resolved once, before scanning)
+- Single ports, inclusive ranges, and comma-separated combinations (`22,80,100-105`)
+- Bounded worker pool of 1 to 100 OS threads
+- Passive banner grabbing with its own read timeout and a 1,024-byte read limit
+- Banners are treated as untrusted: control characters are escaped before they reach the terminal
+- Open, closed, timed-out, and error classification
+- Text output by default, or a single JSON document with `--json`
+- Typed validation errors (`thiserror`) and clean error exits (`anyhow`)
 
 ## Build
 
-From the project root:
+Requires a Rust toolchain that supports edition 2024.
+
+```bash
+cargo build --release
+./target/release/netscan 127.0.0.1
+```
+
+On Windows (PowerShell):
 
 ```powershell
 cargo build --release
-```
-
-Run from source:
-
-```powershell
-cargo run -- 127.0.0.1
-```
-
-Or run the Windows release binary:
-
-```powershell
 .\target\release\netscan.exe 127.0.0.1
 ```
 
-## CLI usage
+Or run from source: `cargo run -- 127.0.0.1`
+
+## Usage
 
 ```text
-netscan [OPTIONS] <IP>
+netscan [OPTIONS] <TARGET>
 ```
 
-`<IP>` is the positional target argument; it accepts an IPv4 address, IPv6 address, or resolvable hostname.
+| Option | Description | Default |
+| --- | --- | --- |
+| `<TARGET>` | IPv4 address, IPv6 address, or hostname | required |
+| `-p, --ports <PORTS>` | Ports and inclusive ranges, e.g. `22,80,100-105` | `1-1024` |
+| `-w, --workers <N>` | Maximum number of worker threads (1 to 100) | `100` |
+| `-t, --timeout <MS>` | TCP connection timeout in milliseconds | `1000` |
+| `-b, --banner-timeout <MS>` | Banner read timeout in milliseconds | `500` |
+| `--json` | Print one JSON document instead of text | off |
+| `--all` | Also list closed, timed-out, and errored ports | off |
+| `-h, --help` | Show help | |
 
-| Argument / option                       | Description                                                     | Default  |
-| --------------------------------------- | --------------------------------------------------------------- | -------- |
-| `<IP>`                                  | Target IP address or hostname (required)                        | —        |
-| `-p, --ports <PORTS>`                   | Ports and inclusive ranges, e.g. `22,80,100-105`                | `1-1024` |
-| `-w, --workers <WORKERS>`               | Maximum scanning workers (1–100)                                | `100`    |
-| `-t, --timeout <TIMEOUT>`               | TCP connection timeout, milliseconds                            | `1000`   |
-| `-b, --banner-timeout <BANNER_TIMEOUT>` | Banner read timeout, milliseconds                               | `500`    |
-| `--json`                                | Output a single JSON document instead of terminal text          | Off      |
-| `--all`                                 | Include closed, timed-out, and errored ports in detailed output | Off      |
-| `-h, --help`                            | Show command-line help                                          | —        |
+Examples:
 
-### Examples (PowerShell)
+```bash
+# Default scan of the first 1024 ports
+netscan 127.0.0.1
 
-Scan a few local ports:
+# Specific ports and a range, fewer workers
+netscan 127.0.0.1 -p 22,80,443,8000-8010 -w 20
 
-```powershell
-cargo run -- 127.0.0.1 -p 22,80,443
-```
+# A hostname, showing every port status
+netscan localhost -p 1-100 --all
 
-Scan a hostname with a limited worker count:
-
-```powershell
-cargo run -- localhost -p 8000-8010 -w 4 -t 1500
-```
-
-Display every port status:
-
-```powershell
-cargo run -- 127.0.0.1 -p 1-10 --all
-```
-
-Produce JSON, including non-open ports:
-
-```powershell
-cargo run --quiet -- 127.0.0.1 -p 1-10 --json --all
-```
-
-Validate the JSON in PowerShell:
-
-```powershell
-cargo run --quiet -- 127.0.0.1 -p 1-10 --json | ConvertFrom-Json
+# JSON, piped to another tool
+netscan 127.0.0.1 -p 1-1024 --json | jq '.results'
 ```
 
 ## Output
 
-By default, the CLI prints open ports, any banners it receives, and a summary of **all** scanned ports. With `--all`, it also prints individual closed, timed-out, and errored ports.
+By default the scanner prints each open port (with its banner, if one was received) and a summary that counts every scanned port.
 
-With `--json`, the CLI emits a JSON object with the resolved target IP, status totals, and a `results` array. `--all` controls which ports appear in `results`, **not** which ports contribute to the totals.
+<!-- Replace this block with real output from your own run -->
 
-Illustrative JSON structure (statuses depend on your environment):
+```text
+127.0.0.1:8000 is OPEN
+127.0.0.1:9000 is OPEN
+  Banner: SSH-2.0-test
+Summary: 2 open, 1 closed, 0 timed out, 0 errors
+```
+
+With `--all`, closed, timed-out, and errored ports are listed too. The summary is the same either way.
+
+### JSON
+
+`--json` prints exactly one JSON document to stdout and nothing else. Errors go to stderr with a non-zero exit code, so the output is safe to pipe into other tools.
+
+<!-- Replace this block with real output from your own run -->
 
 ```json
 {
-	"ip": "127.0.0.1",
-	"open": 1,
-	"closed": 1,
-	"timedout": 0,
-	"errors": 0,
-	"results": [
-		{
-			"port": 8080,
-			"status": "Open",
-			"banner": null,
-			"error": null
-		}
-	]
+  "target": "127.0.0.1",
+  "ip": "127.0.0.1",
+  "open": 2,
+  "closed": 1,
+  "timed_out": 0,
+  "errors": 0,
+  "results": [
+    { "port": 8000, "status": "open", "banner": null, "error": null },
+    { "port": 9000, "status": "open", "banner": "SSH-2.0-test", "error": null }
+  ]
 }
 ```
 
-The example shows default filtering: one closed port contributes to the `closed` count but is absent from `results`. With `--all`, that port would also appear in the array. Status strings currently use `Open`, `Closed`, `TimedOut`, and `Error`. An error entry can include its I/O error message in the `error` field.
+- `target` is what you typed and `ip` is the address that was scanned.
+- The totals always include every scanned port. `--all` only controls which ports appear in `results`.
+- `status` is one of `open`, `closed`, `timed_out`, or `error`. An `error` entry carries the I/O error message in `error`.
+- Banners appear in JSON as the received text. Serde escapes the JSON string itself. Escaping for the terminal is applied only to text output.
 
 ## How it works
 
-1. **Parse arguments:** `clap` reads the target, port specification, timeouts, worker count, and output flags.
-2. **Resolve target:** `target.rs` accepts numeric IPs directly or resolves a hostname using `ToSocketAddrs`, selecting one address for the scan.
-3. **Validate input:** Port specifications are expanded, sorted, and deduplicated. Scanner configuration validates worker limits and nonzero timeouts.
-4. **Distribute ports:** The scanner shares a `Vec<u16>` work queue through `Arc<Mutex<_>>`. Each worker removes a port while holding the lock, then releases it before performing network I/O.
-5. **Connect and classify:** `TcpStream::connect_timeout` attempts a TCP connection. Results are classified as open, closed, timed out, or another I/O error.
-6. **Read optional banner:** After a successful connection, `banner.rs` performs a passive, timeout-limited read and sanitizes any received text. No protocol-specific request is sent.
-7. **Collect and report:** Worker-local results are merged and sorted by port. `report.rs` calculates totals, applies `--all` filtering, and prints terminal text or serialized JSON.
+### What a connect scan observes
 
-### Source layout
+A connect scan asks the operating system to complete a normal TCP handshake with each port. The result depends on how the target answers:
 
-| File             | Responsibility                                                |
-| ---------------- | ------------------------------------------------------------- |
-| `src/main.rs`    | Clap CLI, orchestration, application error propagation        |
-| `src/lib.rs`     | Library module exports                                        |
-| `src/scanner.rs` | Scanner configuration, worker pool, TCP status classification |
-| `src/target.rs`  | Port parsing and hostname/IP resolution                       |
-| `src/banner.rs`  | Passive banner reads and sanitization                         |
-| `src/report.rs`  | Summary counts, result filtering, text/JSON reporting         |
+| What happens | Reported as |
+| --- | --- |
+| Handshake completes (SYN, SYN-ACK, ACK) | `open` |
+| Target replies with a reset (RST) | `closed` |
+| No reply before the timeout | `timed_out` (often a firewall silently dropping packets, or a host that is down) |
+| Another failure, such as network unreachable | `error` |
 
-The scanner returns structured `ScanResult` values rather than printing directly. The reporting layer handles presentation separately.
+Because it uses ordinary sockets, it needs no raw-socket access or elevated privileges. The trade-off is that every probe completes a full connection, which is slower than a half-open SYN scan and shows up in the target's logs.
 
-## Development checks
+### Pipeline
 
-```powershell
+1. **Parse arguments.** `clap` reads the target, port specification, timeouts, worker count, and output flags.
+2. **Validate input.** The port specification is expanded, sorted, and deduplicated. Configuration rejects zero workers, more than 100 workers, and zero timeouts.
+3. **Resolve the target.** Numeric addresses are used directly. A hostname is resolved once with `ToSocketAddrs` and one returned address is scanned.
+4. **Distribute ports.** Ports sit in a shared `Arc<Mutex<Vec<u16>>>` work queue. Each worker locks it only long enough to pop one port, then releases the lock before any network I/O.
+5. **Connect and classify.** `TcpStream::connect_timeout` attempts the connection and the result is mapped to a status.
+6. **Read a banner.** After a successful connection, one passive read runs under the banner timeout. Nothing is sent to the service.
+7. **Collect and report.** Each worker returns its own results. The results are joined, merged, and sorted by port, and the reporting layer prints text or JSON.
+
+The scanner returns structured `ScanResult` values and never prints. Presentation lives entirely in `report.rs`.
+
+## Design decisions
+
+- **Bounded worker pool instead of a thread per port.** The first version spawned one OS thread per port. That does not scale: large ranges run into thread and open-file limits. A fixed pool pulling from a shared queue caps concurrency and keeps the design simple.
+- **Per-worker result vectors.** Each worker collects results privately and hands them back through `join()`. The only shared state is the work queue, and its lock is held only for a single `pop`.
+- **Passive banners.** The scanner connects and listens. This works for services that speak first (SSH, FTP, SMTP) and produces nothing for services that wait for a request (plain HTTP). Sending protocol probes is out of scope.
+- **Separate connect and banner timeouts.** A silent open port would otherwise hold a worker for the full connect timeout. The banner read has its own, shorter timeout.
+- **Banners are untrusted input.** The text comes from a host you do not control. Control characters, including terminal escape sequences, are escaped before printing so a hostile service cannot rewrite the terminal output or forge extra result lines.
+- **Typed errors.** Port parsing and configuration return typed errors, and `main` propagates them with `anyhow`, so bad input produces a one-line message and exit code 1 instead of a panic.
+- **JSON built from separate output types.** `io::Error` cannot be serialized, so the report converts scan results into dedicated serializable structs and the scanner itself stays free of serde.
+
+## Security considerations
+
+- **Authorization.** Scanning systems you do not own or have permission to test may be illegal. Keep tests to localhost and lab machines.
+- **Detectability.** Connect scans complete full connections and are visible in service and firewall logs.
+- **Untrusted data.** Banners are attacker-controlled text. They are escaped for terminal output and never executed or interpreted.
+- **No elevated privileges.** The tool uses ordinary TCP sockets only.
+
+## Platform notes
+
+On Windows, a refused connection to a local port can take longer than the default 1000 ms timeout, so closed ports may be reported as `timed_out`. If you see this, raise the timeout (for example `-t 3000`).
+
+## Project layout
+
+| File | Responsibility |
+| --- | --- |
+| `src/main.rs` | CLI definition and orchestration |
+| `src/lib.rs` | Library module exports |
+| `src/scanner.rs` | Configuration, worker pool, TCP status classification |
+| `src/target.rs` | Port parsing and hostname/IP resolution |
+| `src/banner.rs` | Passive banner reads |
+| `src/report.rs` | Counting, filtering, and text/JSON output |
+| `tests/scan.rs` | Loopback integration test |
+
+## Development
+
+```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build --release
 ```
 
-For a smoke test, start a local TCP listener on a known port and verify that it is reported as open in both default and JSON modes. Banner contents are only present if the service sends data without requiring a request.
+The test suite covers the port parser, the banner sanitizer, and a loopback integration test that scans a listener it creates. CI runs the same checks on every push.
 
 ## Limitations
 
-- **TCP connect only:** No UDP, SYN/raw-socket scanning, or packet capture.
-- **Passive banners:** Services that wait for a client request may not return a banner.
-- **Single banner read:** At most 1,024 bytes are read per open connection; a banner timeout does not make the port closed.
-- **One resolved address:** Hostnames are resolved once and one returned IP address is scanned, not every DNS result.
-- **Blocking concurrency:** The scanner uses a bounded OS-thread worker pool, not async I/O.
-- **Environment-dependent results:** Firewall rules, local networking, and remote behavior affect whether a port is refused, times out, or produces another error.
-- **No service fingerprinting:** A received banner is unverified text, not a confirmed service or version identification.
+- **TCP connect only.** No UDP, SYN, or raw-socket scanning, and no packet capture.
+- **Passive banners only.** Services that wait for a client request return no banner.
+- **One banner read.** At most 1,024 bytes are read per open connection.
+- **One resolved address.** A hostname resolves once and a single address is scanned, not every DNS result.
+- **Blocking threads.** Concurrency uses OS threads, not async I/O, so very high concurrency is limited by thread and file-descriptor limits.
+- **Worker panics abort the scan.** A panic inside a worker thread propagates when results are joined.
+- **Environment-dependent results.** Firewalls and network conditions affect whether a port is refused, times out, or errors.
+- **No service fingerprinting.** A banner is unverified text, not a confirmed service or version.
 
 ## Roadmap
 
-**v0.2.0:** Hostname resolution, banner sanitization, structured errors, and JSON output, built on the existing thread-pool scanner.
-
-**Next:** Further scanner robustness and integration tests, followed by consideration of Tokio once the blocking implementation is well understood and verified.
+- **v0.3.0 (planned):** replace the thread pool with Tokio tasks and a semaphore, keep the same CLI and tests, and publish a before-and-after benchmark.
 
 ## License
 
-MIT, See LICENSE
+MIT. See [LICENSE](LICENSE).
