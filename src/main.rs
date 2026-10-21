@@ -1,4 +1,3 @@
-use anyhow::Ok;
 use clap::Parser;
 use std::time::Duration;
 
@@ -28,6 +27,10 @@ struct Args {
     #[arg(short = 'b', long, default_value_t = 500)]
     banner_timeout: u64,
 
+    /// Option to output the results in JSON format.
+    #[arg(long)]
+    json: bool,
+
     /// Include closed, timed-out, and errored ports in the output.
     #[arg(long)]
     all: bool,
@@ -51,6 +54,6 @@ fn main() -> anyhow::Result<()> {
 
     let result_list = scan_ports(resolved_ip, ports, &scan_config);
 
-    report(resolved_ip, &result_list, args.all);
+    report(resolved_ip, &result_list, args.json, args.all)?;
     Ok(())
 }
