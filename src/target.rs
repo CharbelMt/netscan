@@ -1,3 +1,6 @@
+use std::net::{IpAddr, ToSocketAddrs};
+
+use anyhow::anyhow;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -10,6 +13,21 @@ pub enum PortParseError {
 
     #[error("Port range is in reverse.")]
     ReversedRange,
+}
+
+// resolve hostname
+pub fn resolve_target(ip: &str) -> anyhow::Result<IpAddr> {
+    match ip.parse::<IpAddr>() {
+        // check if ip is valid ip first or not
+        Ok(addr) => Ok(addr),
+
+        // if not a direct ip, resolve host name
+        Err(_) => (ip, 0) // use ip and placeholder port 0
+            .to_socket_addrs()? // attempt to transform into a socket address
+            .next() // get the first option from the iterator
+            .ok_or_else(|| anyhow!("Cannot resolve hostname")) // transform value into result, or return error
+            .map(|address| address.ip()), // extract and convert the valid address to a usable ip
+    }
 }
 
 pub fn parse_ports(input: &str) -> Result<Vec<u16>, PortParseError> {

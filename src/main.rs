@@ -1,16 +1,16 @@
+use anyhow::Ok;
 use clap::Parser;
-use std::net::IpAddr;
 use std::time::Duration;
 
 use netscan::report::report;
 use netscan::scanner::{Config, scan_ports};
-use netscan::target::parse_ports;
+use netscan::target::{parse_ports, resolve_target};
 
 /// A multithreaded TCP port scanner.
 #[derive(Parser)]
 struct Args {
-    /// Target IPv4 or IPv6 address to scan.
-    ip: IpAddr,
+    /// Target Hostname or IPv4/IPv6 address to scan.
+    ip: String,
 
     /// Ports to scan, specified individually or as ranges (e.g. 22,80,100-105).
     #[arg(short = 'p', long, default_value = "1-1024")]
@@ -38,6 +38,8 @@ fn main() -> anyhow::Result<()> {
     // (short form: cargo run -- 127.0.0.1 -p 22,80,100-105 -w 4 -t 1000)
     let args = Args::parse();
 
+    let resolved_ip = resolve_target(&args.ip)?;
+
     // ports to be scanned
     let ports: Vec<u16> = parse_ports(&args.ports)?;
 
@@ -47,8 +49,8 @@ fn main() -> anyhow::Result<()> {
         Duration::from_millis(args.banner_timeout),
     )?;
 
-    let result_list = scan_ports(args.ip, ports, &scan_config);
+    let result_list = scan_ports(resolved_ip, ports, &scan_config);
 
-    report(args.ip, &result_list, args.all);
+    report(resolved_ip, &result_list, args.all);
     Ok(())
 }
