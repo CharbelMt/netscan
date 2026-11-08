@@ -1,8 +1,8 @@
 # netscan
 
-[![CI](https://github.com/<you>/netscan/actions/workflows/ci.yml/badge.svg)](https://github.com/<you>/netscan/actions/workflows/ci.yml)
+[![CI](https://github.com/CharbelMt/netscan/actions/workflows/ci.yml/badge.svg)](https://github.com/CharbelMt/netscan/actions/workflows/ci.yml)
 
-A multithreaded TCP connect port scanner and passive banner grabber, written in Rust.
+An asynchronous TCP connect port scanner and passive banner grabber, written in Rust with Tokio.
 
 `netscan` takes an IPv4 address, IPv6 address, or hostname, tries to open TCP connections to a set of ports, classifies each result (open, closed, timed out, or error), reads a service banner from open ports when the service sends one, and reports the results as terminal text or JSON. It was built as a learning project to practice systems-level Rust and to make the mechanics of a connect scan explicit: concurrency, timeouts, error handling, and treating network data as untrusted input.
 
@@ -13,7 +13,7 @@ A multithreaded TCP connect port scanner and passive banner grabber, written in 
 - TCP connect scanning with a configurable connection timeout
 - IPv4, IPv6, and hostname targets (a hostname is resolved once, before scanning)
 - Single ports, inclusive ranges, and comma-separated combinations (`22,80,100-105`)
-- Bounded worker pool of 1 to 100 OS threads
+- Tokio tasks with semaphore-bounded concurrency from 1 to 100 scans
 - Passive banner grabbing with its own read timeout and a 1,024-byte read limit
 - Banners are treated as untrusted: control characters are escaped before they reach the terminal
 - Open, closed, timed-out, and error classification
@@ -48,7 +48,7 @@ netscan [OPTIONS] <TARGET>
 | --- | --- | --- |
 | `<TARGET>` | IPv4 address, IPv6 address, or hostname | required |
 | `-p, --ports <PORTS>` | Ports and inclusive ranges, e.g. `22,80,100-105` | `1-1024` |
-| `-w, --workers <N>` | Maximum number of worker threads (1 to 100) | `100` |
+| `-c, --concurrency <N>` | Maximum number of concurrent scans (1 to 100) | `100` |
 | `-t, --timeout <MS>` | TCP connection timeout in milliseconds | `1000` |
 | `-b, --banner-timeout <MS>` | Banner read timeout in milliseconds | `500` |
 | `--json` | Print one JSON document instead of text | off |
@@ -61,8 +61,8 @@ Examples:
 # Default scan of the first 1024 ports
 netscan 127.0.0.1
 
-# Specific ports and a range, fewer workers
-netscan 127.0.0.1 -p 22,80,443,8000-8010 -w 20
+# Specific ports and a range, with bounded concurrency
+netscan 127.0.0.1 -p 22,80,443,8000-8010 -c 20
 
 # A hostname, showing every port status
 netscan localhost -p 1-100 --all
@@ -129,22 +129,22 @@ Because it uses ordinary sockets, it needs no raw-socket access or elevated priv
 
 ### Pipeline
 
-1. **Parse arguments.** `clap` reads the target, port specification, timeouts, worker count, and output flags.
-2. **Validate input.** The port specification is expanded, sorted, and deduplicated. Configuration rejects zero workers, more than 100 workers, and zero timeouts.
+1. **Parse arguments.** `clap` reads the target, port specification, timeouts, concurrency limit, and output flags.
+2. **Validate input.** The port specification is expanded, sorted, and deduplicated. Configuration rejects concurrency below 1, concurrency above 100, and zero timeouts.
 3. **Resolve the target.** Numeric addresses are used directly. A hostname is resolved once with `ToSocketAddrs` and one returned address is scanned.
-4. **Distribute ports.** Ports sit in a shared `Arc<Mutex<Vec<u16>>>` work queue. Each worker locks it only long enough to pop one port, then releases the lock before any network I/O.
-5. **Connect and classify.** `TcpStream::connect_timeout` attempts the connection and the result is mapped to a status.
+4. **Schedule scans.** The scanner acquires a semaphore permit before spawning one Tokio task for each port. A permit is released when that task finishes.
+5. **Connect and classify.** Asynchronous `TcpStream::connect` attempts the connection under the configured timeout and the result is mapped to a status.
 6. **Read a banner.** After a successful connection, one passive read runs under the banner timeout. Nothing is sent to the service.
-7. **Collect and report.** Each worker returns its own results. The results are joined, merged, and sorted by port, and the reporting layer prints text or JSON.
+7. **Collect and report.** The task handles are awaited, and results are sorted by port before the reporting layer prints text or JSON.
 
 The scanner returns structured `ScanResult` values and never prints. Presentation lives entirely in `report.rs`.
 
 ## Design decisions
 
-- **Bounded worker pool instead of a thread per port.** The first version spawned one OS thread per port. That does not scale: large ranges run into thread and open-file limits. A fixed pool pulling from a shared queue caps concurrency and keeps the design simple.
-- **Per-worker result vectors.** Each worker collects results privately and hands them back through `join()`. The only shared state is the work queue, and its lock is held only for a single `pop`.
+- **Semaphore-bounded Tokio tasks.** Each port scan runs in its own Tokio task, while a semaphore limits active scans to the configured concurrency. Permits are acquired before tasks are spawned and released when scans finish.
+- **Asynchronous TCP I/O.** Tokio's networking and timing APIs allow scans to wait on connections and banner reads without blocking an OS thread per port.
 - **Passive banners.** The scanner connects and listens. This works for services that speak first (SSH, FTP, SMTP) and produces nothing for services that wait for a request (plain HTTP). Sending protocol probes is out of scope.
-- **Separate connect and banner timeouts.** A silent open port would otherwise hold a worker for the full connect timeout. The banner read has its own, shorter timeout.
+- **Separate connect and banner timeouts.** A silent open port would otherwise hold a scan task for the full connect timeout. The banner read has its own, shorter timeout.
 - **Banners are untrusted input.** The text comes from a host you do not control. Control characters, including terminal escape sequences, are escaped before printing so a hostile service cannot rewrite the terminal output or forge extra result lines.
 - **Typed errors.** Port parsing and configuration return typed errors, and `main` propagates them with `anyhow`, so bad input produces a one-line message and exit code 1 instead of a panic.
 - **JSON built from separate output types.** `io::Error` cannot be serialized, so the report converts scan results into dedicated serializable structs and the scanner itself stays free of serde.
@@ -166,7 +166,7 @@ On Windows, a refused connection to a local port can take longer than the defaul
 | --- | --- |
 | `src/main.rs` | CLI definition and orchestration |
 | `src/lib.rs` | Library module exports |
-| `src/scanner.rs` | Configuration, worker pool, TCP status classification |
+| `src/scanner.rs` | Configuration, Tokio task scheduling, and TCP status classification |
 | `src/target.rs` | Port parsing and hostname/IP resolution |
 | `src/banner.rs` | Passive banner reads |
 | `src/report.rs` | Counting, filtering, and text/JSON output |
@@ -181,7 +181,7 @@ cargo test
 cargo build --release
 ```
 
-The test suite covers the port parser, the banner sanitizer, and a loopback integration test that scans a listener it creates. CI runs the same checks on every push.
+The test suite covers the port parser, the banner sanitizer, a loopback integration test, and a concurrent scan across several listeners that checks statuses, banners, and sorted output. CI runs the same checks on every push.
 
 ## Limitations
 
@@ -189,14 +189,9 @@ The test suite covers the port parser, the banner sanitizer, and a loopback inte
 - **Passive banners only.** Services that wait for a client request return no banner.
 - **One banner read.** At most 1,024 bytes are read per open connection.
 - **One resolved address.** A hostname resolves once and a single address is scanned, not every DNS result.
-- **Blocking threads.** Concurrency uses OS threads, not async I/O, so very high concurrency is limited by thread and file-descriptor limits.
-- **Worker panics abort the scan.** A panic inside a worker thread propagates when results are joined.
+- **Task failures abort the scan.** A panic inside a scan task propagates when its join handle is awaited.
 - **Environment-dependent results.** Firewalls and network conditions affect whether a port is refused, times out, or errors.
 - **No service fingerprinting.** A banner is unverified text, not a confirmed service or version.
-
-## Roadmap
-
-- **v0.3.0 (planned):** replace the thread pool with Tokio tasks and a semaphore, keep the same CLI and tests, and publish a before-and-after benchmark.
 
 ## License
 
