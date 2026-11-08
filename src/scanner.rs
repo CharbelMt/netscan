@@ -25,18 +25,18 @@ pub enum PortStatus {
 }
 
 pub struct Config {
-    worker_count: usize,
+    concurrency: usize,
     timeout: Duration,
     banner_timeout: Duration,
 }
 
 #[derive(Error, Debug)]
 pub enum ConfigError {
-    #[error("Cannot spawn 0 workers")]
-    ZeroWorkers,
+    #[error("Concurrency must be at least 1")]
+    ZeroConcurrency,
 
-    #[error("Cannot spawn more than 100 workers")]
-    TooManyWorkers,
+    #[error("Concurrency cannot exceed 100")]
+    ConcurrencyTooHigh,
 
     #[error("Connection timeout cannot be 0")]
     ZeroConnectionTimeout,
@@ -47,16 +47,15 @@ pub enum ConfigError {
 
 impl Config {
     pub fn new(
-        worker_count: usize,
+        concurrency: usize,
         timeout: Duration,
         banner_timeout: Duration,
     ) -> Result<Self, ConfigError> {
-        // safety checks for worker count and timeout
-        if worker_count == 0 {
-            return Err(ConfigError::ZeroWorkers);
+        if concurrency == 0 {
+            return Err(ConfigError::ZeroConcurrency);
         }
-        if worker_count > 100 {
-            return Err(ConfigError::TooManyWorkers);
+        if concurrency > 100 {
+            return Err(ConfigError::ConcurrencyTooHigh);
         }
         if timeout == Duration::ZERO {
             return Err(ConfigError::ZeroConnectionTimeout);
@@ -66,7 +65,7 @@ impl Config {
         }
 
         Ok(Self {
-            worker_count,
+            concurrency,
             timeout,
             banner_timeout,
         })
@@ -74,41 +73,40 @@ impl Config {
 }
 
 pub async fn scan_ports(ip: IpAddr, ports: Vec<u16>, scan_config: &Config) -> Vec<ScanResult> {
-    let task_count = scan_config.worker_count.min(ports.len());
+    let concurrency_limit = scan_config.concurrency.min(ports.len());
     let timeout_time = scan_config.timeout;
     let banner_timeout = scan_config.banner_timeout;
 
-    // create a semaphore to manage concurrent worker execution limits
-    let worker_capacity = Arc::new(Semaphore::new(task_count));
+    // Limit the number of scans that can run concurrently.
+    let semaphore = Arc::new(Semaphore::new(concurrency_limit));
 
-    // store join handles for each spawned port scanning task to await them later
+    // Keep handles in spawn order so each scan can be awaited and collected.
     let mut results: Vec<JoinHandle<ScanResult>> = vec![];
 
-    // iterate through all target ports by spawning tasks
     for current_port in ports {
-        // concurrency permit
-        let permit = worker_capacity.clone().acquire_owned().await.unwrap();
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("semaphore closed");
 
-        // spawn an independent Tokio task to execute the port scan concurrently
         results.push(tokio::spawn(async move {
             let result_future = scan_port(ip, current_port, timeout_time, banner_timeout);
             let result = result_future.await;
 
-            // release the semaphore permit back to the pool after scanning
             drop(permit);
 
             result
         }));
     }
 
-    // await all spawned tasks and collect their respective port scan outcomes
     let mut result_list = vec![];
 
     for result in results {
         result_list.push(result.await.unwrap());
     }
 
-    // sort the final results sequentially
+    // Sort by port so output order does not depend on input order.
     result_list.sort_by_key(|res| res.port_number);
 
     result_list
