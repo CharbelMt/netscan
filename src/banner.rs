@@ -1,31 +1,27 @@
-use std::io::Read;
-use std::net::TcpStream;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
+use tokio::net::TcpStream;
+use tokio::time::timeout;
 
-pub fn grab_banner(stream: &mut TcpStream, timeout: Duration) -> Option<String> {
+pub async fn grab_banner(stream: &mut TcpStream, time_out: Duration) -> Option<String> {
     let mut buffer = [0u8; 1024]; // memory buffer to store bytes with data
 
-    // set read timeout with the configured timeout for banner read
-    match stream.set_read_timeout(Some(timeout)) {
-        Ok(_) => {
-            // try to extract banner bytes and data
-            match stream.read(&mut buffer) {
-                // if 0 bytes of banner data, return None
-                Ok(0) => None,
+    // set tokio timeout with AsyncRead on the stream as future
+    match timeout(time_out, stream.read(&mut buffer)).await {
+        // if 0 bytes of banner data, return None
+        Ok(Ok(0)) => None,
 
-                // if n bytes, construct a string from the buffer
-                Ok(n) => {
-                    let text = String::from_utf8_lossy(&buffer[..n]).into_owned(); // convert from a slice of bytes to a String
+        // if n bytes, construct a string from the buffer
+        Ok(Ok(n)) => {
+            let text = String::from_utf8_lossy(&buffer[..n]).into_owned(); // convert from a slice of bytes to a String
 
-                    Some(sanitize_banner(&text))
-                }
-
-                // read error, return None
-                Err(_) => None,
-            }
+            Some(sanitize_banner(&text))
         }
 
-        // timeout configuration failure
+        // read error, return None
+        Ok(Err(_)) => None,
+
+        // tokio timeout
         Err(_) => None,
     }
 }
